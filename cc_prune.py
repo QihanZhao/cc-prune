@@ -773,9 +773,10 @@ def validate(new: list[dict], uuids: list, parents: list, thinking: list) -> str
         return "parentUuid chain changed"
     if thinking_fingerprint(new) != thinking:
         return "thinking blocks altered -- the API would reject this"
-    uses = {b["id"] for r in new for b in blocks(r)
+    messages = [r for r in new if not str(r.get("type", "")).startswith("api-request")]
+    uses = {b["id"] for r in messages for b in blocks(r)
             if b.get("type") == "tool_use" and b.get("id")}
-    results = {b.get("tool_use_id") for r in new for b in blocks(r)
+    results = {b.get("tool_use_id") for r in messages for b in blocks(r)
                if b.get("type") == "tool_result"}
     if not results <= uses:
         return "tool_use / tool_result pairing broken"
@@ -1500,9 +1501,10 @@ def validate_cut(new: list[dict], old: list[dict], purged: set[int], copies: lis
     uses, results = tool_ids(new, conv)
     if not results <= uses:
         return "a kept tool_result lost its tool_use"
-    all_uses = {b["id"] for r in new for b in blocks(r)
+    messages = [r for r in new if not str(r.get("type", "")).startswith("api-request")]
+    all_uses = {b["id"] for r in messages for b in blocks(r)
                 if b.get("type") == "tool_use" and b.get("id")}
-    all_results = {b.get("tool_use_id") for r in new for b in blocks(r)
+    all_results = {b.get("tool_use_id") for r in messages for b in blocks(r)
                    if b.get("type") == "tool_result"}
     if not all_results <= all_uses:
         return "tool_use / tool_result pairing broken"
