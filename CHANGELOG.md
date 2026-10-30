@@ -1,5 +1,27 @@
 # Changelog
 
+## 0.3.0 (2026-10-30)
+
+### Added
+
+- `clearcut FILE --drop F [--keep-head N] [--keep-tail F] --yes`: a `cut` followed by a
+  `clear` in one call. The cut uses `--purge` and keeps the first turn by default
+  (`--keep-head 1`, `--branch` keeps the cut turns as an unreachable branch instead); the
+  clear uses `--results 1 --inputs 1` and `--images` (`--no-images` leaves them). A single
+  snapshot is taken before the cut, so one `restore` undoes both steps. Without `--yes` it
+  previews the cut only and prints the flags the clear would run with. `--keep-tail`,
+  `--commands`, `--attachments`, `--transformations`, `--drop-failing-thinking`,
+  `--drop-all-thinking`, `--no-note`, `--no-reset-usage` and `--force` pass through to
+  the two commands. It calls `cmd_cut` and `cmd_clear` through the real subparsers, so
+  their defaults stay in one place, and the result is byte-identical to running the two
+  by hand. The live-session guard applies to the cut; the clear step then runs with
+  `--force`, because the cut has just rewritten the file.
+
+### Changed
+
+- The argument parser is built by `build_parser()`. `clear` has a hidden `--no-snapshot`,
+  used by `clearcut`. The defaults of `cut` and `clear` are unchanged.
+
 ## 0.2.2 (2026-10-30)
 
 ### Changed

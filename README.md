@@ -328,6 +328,7 @@ restore FILE N                 restore snapshot N
 audit FILE LINE...             is this specific result safe to clear?
 strip-commands FILE --orphans  clear /context, /cost output
 cut FILE --drop F | --from A --to B   cut a stretch of turns (previews unless --yes)
+clearcut FILE --drop F         cut, then clear, with one snapshot (previews unless --yes)
 density --before --after --mb  derive chars/token from a measured cut
 ```
 

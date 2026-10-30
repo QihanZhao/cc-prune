@@ -48,7 +48,7 @@ import uuid
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 
-__version__ = "0.2.2"
+__version__ = "0.3.0"
 
 # --------------------------------------------------------------------------
 # settings -- the values you are most likely to want to change
