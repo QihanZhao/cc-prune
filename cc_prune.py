@@ -837,8 +837,10 @@ def cmd_clear(args) -> None:
         thinking_plan(load(args.path), args)
 
     since = last_edit_time(args.path)
-    n, snap = take_snapshot(args.path)
-    print(f"snapshot -> {os.path.basename(snap)}")
+    size_before = os.path.getsize(args.path)
+    if not args.no_snapshot:
+        n, snap = take_snapshot(args.path)
+        print(f"snapshot -> {os.path.basename(snap)}")
 
     recs = load(args.path)
     before = load(args.path)
@@ -935,7 +937,9 @@ def cmd_clear(args) -> None:
         print(f"\nusage reset: last request {reset[0]:,} -> ~{reset[1]:,} tokens "
               f"on {len(reset[2])} records (estimate, kept "
               f"{ESTIMATE_MARGIN:.1%} under; the next real reply corrects it)")
-    print(f"\nsize {mb(os.path.getsize(snap))} -> {mb(os.path.getsize(args.path))}")
+    print(f"\nsize {mb(size_before)} -> {mb(os.path.getsize(args.path))}")
+    if args.no_snapshot:
+        return
     print(f"rollback: cc_prune.py restore {os.path.basename(args.path)} {n}")
     print("\nNow: resume the session, send a REAL message (not a slash command),\n"
           "and read the status bar. Do not use /context to verify.")
@@ -1475,6 +1479,43 @@ def cmd_cut(args) -> None:
           "and read the status bar. Do not use /context to verify.")
 
 
+def cmd_clearcut(args) -> None:
+    if args.drop_failing_thinking and args.drop_all_thinking:
+        sys.exit("--drop-failing-thinking and --drop-all-thinking are alternatives; "
+                 "pick one")
+    parser = build_parser()
+
+    cut = ["cut", args.path, "--drop", str(args.drop), "--keep-head", str(args.keep_head)]
+    cut += [flag for on, flag in [(not args.branch, "--purge"),
+                                  (args.no_note, "--no-note"),
+                                  (args.no_reset_usage, "--no-reset-usage"),
+                                  (args.force, "--force"),
+                                  (args.yes, "--yes")] if on]
+
+    clear = ["clear", args.path, "--results", str(args.results),
+             "--inputs", str(args.inputs), "--no-snapshot", "--yes", "--force"]
+    if args.keep_tail is not None:
+        clear += ["--keep-tail", str(args.keep_tail)]
+    if args.commands:
+        clear += ["--commands", str(args.commands)]
+    if args.attachments:
+        clear += ["--attachments", str(args.attachments)]
+    clear += [flag for on, flag in [(not args.no_images, "--images"),
+                                    (args.transformations, "--transformations"),
+                                    (args.drop_failing_thinking, "--drop-failing-thinking"),
+                                    (args.drop_all_thinking, "--drop-all-thinking"),
+                                    (args.no_reset_usage, "--no-reset-usage")] if on]
+
+    cut_args, clear_args = parser.parse_args(cut), parser.parse_args(clear)
+    cmd_cut(cut_args)
+    if not args.yes:
+        print("then clear: " + " ".join(clear[2:]))
+        return
+    # the cut passed the live guard and just rewrote the file, which trips the
+    # recent-edit check; its snapshot already covers the clear
+    cmd_clear(clear_args)
+
+
 def validate_cut(new: list[dict], old: list[dict], purged: set[int], copies: list[dict],
                  tail_first: int, expect: list, thinking: list, kept: list) -> str | None:
     copy_ids = [c["uuid"] for c in copies]
@@ -1675,7 +1716,7 @@ def estimate_after(path: str, before: list[dict], new: list[dict], since: float)
 
 # --------------------------------------------------------------------------
 
-def main() -> None:
+def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="cc_prune.py",
         description="Surgical context recovery for Claude Code sessions.",
@@ -1752,6 +1793,7 @@ def main() -> None:
     c.add_argument("--no-reset-usage", action="store_true",
                    help="leave the recorded usage alone (a pruned session "
                         "near its limit may then refuse to resume)")
+    c.add_argument("--no-snapshot", action="store_true", help=argparse.SUPPRESS)
 
     ru = sub.add_parser("reset-usage", help="rewrite stale recorded usage so a "
                                             "pruned session can resume")
@@ -1809,11 +1851,51 @@ def main() -> None:
     ct.add_argument("--no-reset-usage", action="store_true",
                     help="leave the recorded usage alone")
 
+    cc = sub.add_parser("clearcut", help="cut, then clear, with one snapshot "
+                                      "(previews the cut unless --yes)")
+    cc.add_argument("path")
+    cc.add_argument("--drop", type=float, required=True, metavar="F",
+                    help="cut this fraction of the conversation after the head")
+    cc.add_argument("--keep-head", type=int, default=1, metavar="N",
+                    help="turns at the start that always stay (default 1)")
+    cc.add_argument("--keep-tail", type=float, default=None, metavar="F",
+                    help="fraction of most recent records the clear leaves "
+                         "untouched (default: clear's own, 0.15)")
+    cc.add_argument("--results", type=int, default=1, metavar="N",
+                    help="clear tool results longer than N chars (default 1)")
+    cc.add_argument("--inputs", type=int, default=1, metavar="N",
+                    help="clear tool inputs longer than N chars (default 1)")
+    cc.add_argument("--no-images", action="store_true",
+                    help="leave images alone")
+    cc.add_argument("--commands", type=int, default=0, metavar="N",
+                    help="also clear Bash `command` values longer than N chars")
+    cc.add_argument("--attachments", type=int, default=0, metavar="N")
+    cc.add_argument("--transformations", action="store_true",
+                    help="also delete the input_transformations log (experimental)")
+    cc.add_argument("--drop-failing-thinking", action="store_true",
+                    help="EXPERIMENTAL, see `clear -h`")
+    cc.add_argument("--drop-all-thinking", action="store_true",
+                    help="EXPERIMENTAL, see `clear -h`")
+    cc.add_argument("--branch", action="store_true",
+                    help="leave the cut records as an unreachable branch instead "
+                         "of purging them")
+    cc.add_argument("--no-note", action="store_true",
+                    help="do not mark the cut in the first kept prompt")
+    cc.add_argument("--no-reset-usage", action="store_true",
+                    help="leave the recorded usage alone")
+    cc.add_argument("--yes", action="store_true", help="apply instead of previewing")
+    cc.add_argument("--force", action="store_true",
+                    help="edit a transcript even if a running session has it open")
+
     d = sub.add_parser("density", help="derive chars/token from a measured cut")
     d.add_argument("--before", type=int, required=True)
     d.add_argument("--after", type=int, required=True)
     d.add_argument("--mb", type=float, required=True)
+    return p
 
+
+def main() -> None:
+    p = build_parser()
     args = p.parse_args()
     if args.cmd is None:
         print(f"cc-prune {__version__}: surgical context recovery for "
@@ -1829,7 +1911,8 @@ def main() -> None:
         return
     {"sessions": cmd_sessions, "usage": cmd_usage, "inspect": cmd_inspect, "clear": cmd_clear,
      "reset-usage": cmd_reset_usage, "snapshots": cmd_snapshots, "restore": cmd_restore, "audit": cmd_audit,
-     "strip-commands": cmd_strip_commands, "cut": cmd_cut, "density": cmd_density}[args.cmd](args)
+     "strip-commands": cmd_strip_commands, "cut": cmd_cut, "clearcut": cmd_clearcut,
+     "density": cmd_density}[args.cmd](args)
 
 
 if __name__ == "__main__":
