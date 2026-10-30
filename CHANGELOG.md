@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.2.2 (2026-10-30)
 
 ### Changed
 
@@ -29,6 +29,11 @@
 - `sessions` showed the auto-generated title for a renamed session. `custom-title` records
   inside the transcript are now read and win over `ai-title` and `summary`; the latest
   one counts.
+- Sessions written by Claude Code 2.1.300 and up carry `api-request` and
+  `api-request-blob` records, and the blobs hold copies of tool results. The tool_use /
+  tool_result pairing check in `validate` and `validate_cut` counted those copies, so a
+  `cut --purge` aborted on results whose tool call sat in the part being deleted. Both
+  checks now look at conversation records only.
 
 ## 0.2.1 (2026-10-14)
 
