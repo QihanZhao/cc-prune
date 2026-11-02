@@ -7,7 +7,10 @@ summarizes everything, including the reasoning you may still want. `cc-prune` ta
 narrower cut: it clears **tool output that Claude has already digested** from the
 session transcript, leaving the conversation, the reasoning, and the structure intact.
 
-Nothing is summarized. No line is deleted. Thinking blocks are never touched.
+Nothing is summarized. No line is deleted. Thinking blocks are never touched, unless you
+pass the opt-in `--drop-all-thinking` or `--drop-failing-thinking`
+([Troubleshooting](docs/troubleshooting.md)). `cut` is the one command that removes
+conversation: a stretch of whole turns you pick ([Cutting turns](#cutting-turns)).
 
 ```
 86.8% full  ──[ clear --results ]──►  57% full
@@ -15,6 +18,14 @@ Nothing is summarized. No line is deleted. Thinking blocks are never touched.
 
 That is a real measurement from one session. Your mileage will vary a lot — see
 [What to expect](#what-to-expect).
+
+---
+
+<div align="center">
+
+[Scope](#honest-scope) · [Install](#install) · [Quick start](#quick-start) · [Workflow](#workflow) · [Cutting](#cutting-turns) · [Troubleshoot](#troubleshooting) · [Commands](#commands) · [Invariants](#invariants)
+
+</div>
 
 ---
 
@@ -31,7 +42,8 @@ a spec. It may break on your version. Keep the snapshot.
 
 **This is not a substitute for `/compact`.** If your session is dominated by *thinking*
 rather than tool output, `cc-prune` cannot help much — thinking blocks are
-cryptographically signed and cannot be edited without the API rejecting the turn.
+cryptographically signed and cannot be edited (editing one makes the API reject the turn or
+drop the block).
 `inspect` will tell you which situation you are in.
 
 ---
@@ -45,6 +57,51 @@ python3 cc_prune.py --version
 ```
 
 Python 3.9+, no dependencies.
+
+---
+
+## Quick start
+
+1. **Exit the Claude Code session** (`exit`, not `kill`). Commands that edit a transcript
+   refuse one that looks live; `--force` overrides that. A session suspended with ctrl+z is
+   still running: bring it back with `fg` and exit it.
+2. **Find the transcript.** This lists your sessions, newest first, with their context size:
+
+   ```bash
+   python3 cc_prune.py sessions
+   F=$(python3 cc_prune.py sessions --paths --limit 1)   # or the path of the one you want
+   ```
+
+3. **Prune.** This is the step that frees context. It clears old tool results and tool
+   inputs, deletes the thinking blocks, takes a snapshot first, and rewrites the recorded
+   usage so the session can be resumed:
+
+   ```bash
+   python3 cc_prune.py clear "$F" --results 1 --inputs 1 --images --drop-all-thinking --yes
+   ```
+
+   The thinking flag keeps the file from growing after the resume. A prune makes Claude
+   Code's API drop the thinking blocks that came after the first edit and report it on every
+   record, which can add tens of KB per record; with no thinking left there is nothing to
+   drop. It changes the file's size, not the model's context. Leave it off (and `--yes`,
+   which only it needs) to keep the reasoning in the transcript.
+
+4. **Resume, send a real message, and read the context from the status bar.** The number
+   the tool printed is an estimate; the first reply replaces it with the API's own count.
+   To undo: `python3 cc_prune.py restore "$F" 0`.
+
+That is the whole job. Everything below is detail.
+
+**Pruned and resumed before without the thinking flag?** Then the file already holds the
+saved reports, and step 3 stops new ones but leaves those. Wait 30 seconds after step 3 (the
+live-session check counts the tool's own write) and remove them:
+
+```bash
+python3 cc_prune.py clear "$F" --transformations --keep-tail 0
+```
+
+On a session's first prune there is nothing to remove. The thinking flags are experimental;
+see [Troubleshooting](docs/troubleshooting.md).
 
 ---
 
@@ -68,7 +125,16 @@ session normally (`exit`, not `kill`) before continuing.
 ### 1. Find the transcript
 
 Transcripts live under `~/.claude/projects/<slugified-cwd>/<session-id>.jsonl`. The
-directory is keyed on the working directory the session started in, not the project:
+directory is keyed on the working directory the session started in, not the project.
+`sessions` lists them, newest first, with their context size:
+
+```bash
+python3 cc_prune.py sessions --sort ctx --limit 10   # biggest context first
+python3 cc_prune.py sessions --grep vpn              # match title, prompt, cwd or id
+F=$(python3 cc_prune.py sessions --paths --limit 1)  # newest session
+```
+
+Or by id, without `sessions`:
 
 ```bash
 F=$(find ~/.claude/projects -name '<session-id>.jsonl' | head -1)
@@ -95,9 +161,11 @@ Buckets, in rough order of how much they are worth clearing:
 |---|---|---|
 | `results` | `--results N` | tool output. Safest, usually the biggest win. |
 | `inputs` | `--inputs N` | `Write`/`Edit` bodies. Real semantic cost — the model forgets what it wrote. `file_path` is preserved. |
-| `attachments` | `--attachments N` | did not reach the API in our one test. Verify before trusting. |
+| `commands` | `--commands N` | `Bash` `command` values (`--inputs` never touches them). Long heredocs add up; the model forgets exactly what it ran. |
+| `attachments` | `--attachments N` | mostly harmless, but the system-prompt and tool-schema attachments are skipped (clearing them broke a resume). Verify before trusting. |
 | `images` | `--images` | billed by pixels, not characters. ~0 tokens. Skip. |
-| `thinking` | — | **locked.** Signed. Only `/compact` touches this. |
+| `thinking` | `--drop-all-thinking` (experimental) | **locked by default.** Signed, and each block is bound to everything before it, so a prune makes the API drop later blocks anyway. The flag deletes them. See [Troubleshooting](docs/troubleshooting.md). |
+| `transformations` | `--transformations` (experimental) | the API's own `input_transformations` report, saved on assistant records. Not conversation. |
 | `text` | — | the conversation. No flag, by design. |
 
 `inspect` reports **bytes, not tokens** — deliberately. See [Density](#density-varies-within-one-file).
@@ -117,6 +185,11 @@ see what it just did. Lowering it recovers a little more and costs a lot of cont
 Every `clear` writes a numbered snapshot first, validates the result before replacing
 the original, and refuses to write if any invariant broke.
 
+`clear` also rewrites the recorded `usage` on the last 5 requests to an estimate of the
+new size; without it a session that was near its limit refuses to resume. The next real
+reply replaces the estimate with the API's own count ([how it works](docs/estimate.md)).
+`--no-reset-usage` leaves usage alone.
+
 ### 5. Verify
 
 Resume the session and **send a real message** — not a slash command. Read the status
@@ -132,6 +205,17 @@ claude --resume <session-id>
 python3 cc_prune.py snapshots "$F"
 python3 cc_prune.py restore  "$F" 0     # 0 = pristine
 ```
+
+---
+
+## Troubleshooting
+
+Symptoms after a prune, with fixes, in [docs/troubleshooting.md](docs/troubleshooting.md):
+
+- `Context limit reached` or `Prompt is too long` right after resuming
+- `tools.0.custom.input_schema: JSON schema is invalid` after resuming
+- the transcript grows tens of KB per turn after a prune
+- `clear` refuses a transcript because a session looks live
 
 ---
 
@@ -200,6 +284,22 @@ python3 cc_prune.py density --before 867650 --after 570000 --mb 0.45
 
 ---
 
+## Cutting turns
+
+When most of what is left is conversation, clearing buckets stops paying. `cut` removes a
+stretch of whole turns from the middle and keeps the start and the recent end verbatim.
+
+```bash
+python3 cc_prune.py cut "$F" --list                          # numbered turns, sizes, prompts
+python3 cc_prune.py cut "$F" --keep-head 5 --drop 0.5        # preview
+python3 cc_prune.py cut "$F" --keep-head 5 --drop 0.5 --yes  # apply
+```
+
+The model loses everything in the cut turns, and the first kept prompt gets a note saying
+so. Details, flags and what was tested: [docs/cut.md](docs/cut.md).
+
+---
+
 ## Preventing the problem
 
 Surgery is triage. The durable fixes are upstream:
@@ -218,13 +318,17 @@ export BASH_MAX_OUTPUT_LENGTH=4000     # default is 30000
 ## Commands
 
 ```
+sessions [--project X ...]     list and filter session transcripts
 usage FILE                     real API token counts
 inspect FILE                   byte accounting by bucket
-clear FILE --results N ...     clear buckets (snapshots first)
+clear FILE --results N ...     clear buckets (snapshots first, resets usage)
+reset-usage FILE --tokens N    rewrite stale recorded usage so a pruned session resumes
 snapshots FILE                 list snapshots
 restore FILE N                 restore snapshot N
 audit FILE LINE...             is this specific result safe to clear?
 strip-commands FILE --orphans  clear /context, /cost output
+cut FILE --drop F | --from A --to B   cut a stretch of turns (previews unless --yes)
+clearcut FILE --drop F         cut, then clear, with one snapshot (previews unless --yes)
 density --before --after --mb  derive chars/token from a measured cut
 ```
 
@@ -249,8 +353,12 @@ Every mutating command validates before replacing the original, and aborts leavi
 file untouched if any of these fail:
 
 - record count and `uuid` / `parentUuid` chains unchanged
-- `thinking` / `redacted_thinking` signatures byte-identical
+- `thinking` / `redacted_thinking` blocks identical, apart from those a thinking flag was
+  asked to delete
 - every `tool_result.tool_use_id` still has a matching `tool_use`
+
+`cut` changes the chain on purpose and checks its own set instead; see
+[docs/cut.md](docs/cut.md).
 
 ---
 
